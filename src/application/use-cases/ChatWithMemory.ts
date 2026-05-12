@@ -6,6 +6,7 @@ import type { Citation, DocumentChunk } from '@/domain/entities';
 
 const TOP_K = 5;
 const HISTORY_LIMIT = 10;
+const MIN_SIMILARITY = 0.5;
 
 interface Deps {
   chunkRepo: IChunkRepository;
@@ -33,7 +34,8 @@ export async function buildChatContext(
     deps.messageRepo.findRecentByConversationId(conversationId, HISTORY_LIMIT),
   ]);
 
-  const relevantChunks = await deps.chunkRepo.searchSimilar(embedding, TOP_K);
+  const candidateChunks = await deps.chunkRepo.searchSimilar(embedding, TOP_K);
+  const relevantChunks = candidateChunks.filter(c => (c.similarity ?? 0) >= MIN_SIMILARITY);
 
   const citations: Citation[] = relevantChunks.map(c => ({
     chunkId: c.id,
@@ -46,8 +48,8 @@ export async function buildChatContext(
 
   const contextBlock = relevantChunks.length > 0
     ? relevantChunks.map((c, i) =>
-        `[${i + 1}] From "${c.documentName}" (section ${c.chunkIndex + 1}):\n${c.content}`
-      ).join('\n\n---\n\n')
+      `[${i + 1}] From "${c.documentName}" (section ${c.chunkIndex + 1}):\n${c.content}`
+    ).join('\n\n---\n\n')
     : 'No relevant documentation found.';
 
   const systemPrompt = `You are a helpful AI support assistant for a SaaS product. Answer questions clearly and accurately using the provided documentation context.
@@ -80,7 +82,10 @@ export async function ensureConversation(
   conversationId: string | undefined,
   deps: Pick<Deps, 'conversationRepo'>
 ): Promise<string> {
-  if (conversationId) return conversationId;
+  if (conversationId) {
+    const existing = await deps.conversationRepo.findById(conversationId);
+    if (existing) return existing.id;
+  }
   const conversation = await deps.conversationRepo.create();
   return conversation.id;
 }
@@ -106,7 +111,8 @@ export async function saveMessages(
     citations,
   });
 
-  // Auto-title: first 6 words of first user message
-  const title = userMessage.split(' ').slice(0, 6).join(' ');
-  await deps.conversationRepo.updateTitle(conversationId, title);
+  // `updateTitle` uses COALESCE so the title is only assigned on the first
+  // message; subsequent calls just bump `updated_at` for sidebar ordering.
+  const candidateTitle = userMessage.split(' ').slice(0, 6).join(' ');
+  await deps.conversationRepo.updateTitle(conversationId, candidateTitle);
 }

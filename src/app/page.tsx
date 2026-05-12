@@ -15,7 +15,6 @@ export default function Home() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConv, setActiveConv] = useState<ConversationState | null>(null);
 
-  // Load initial data
   useEffect(() => {
     Promise.all([
       fetch("/api/documents").then((r) => r.json()),

@@ -1,13 +1,13 @@
-'use client';
+"use client";
 
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Bot, Sparkles } from 'lucide-react';
-import { MessageBubble } from './MessageBubble';
-import type { Citation, Message } from '@/domain/entities';
+import { useState, useRef, useEffect, useCallback } from "react";
+import { Send, Bot, Sparkles } from "lucide-react";
+import { MessageBubble } from "./MessageBubble";
+import type { Citation, Message } from "@/domain/entities";
 
 interface StreamMessage {
   id: string;
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   content: string;
   citations?: Citation[];
   isStreaming?: boolean;
@@ -19,6 +19,8 @@ interface ChatInterfaceProps {
   onConversationCreated: (id: string) => void;
 }
 
+const STREAM_SEPARATOR = "\n ---STREAM-START--- \n";
+
 function generateId() {
   return Math.random().toString(36).slice(2);
 }
@@ -29,9 +31,9 @@ export function ChatInterface({
   onConversationCreated,
 }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<StreamMessage[]>(() =>
-    initialMessages.map(m => ({ ...m, id: m.id }))
+    initialMessages.map((m) => ({ ...m, id: m.id })),
   );
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -39,92 +41,118 @@ export function ChatInterface({
 
   useEffect(() => {
     activeConvIdRef.current = conversationId;
-    setMessages(initialMessages.map(m => ({ ...m, id: m.id })));
+    setMessages(initialMessages.map((m) => ({ ...m, id: m.id })));
   }, [conversationId, initialMessages]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const handleSubmit = useCallback(async (e?: React.FormEvent) => {
-    e?.preventDefault();
-    const text = input.trim();
-    if (!text || isLoading) return;
+  const handleSubmit = useCallback(
+    async (e?: React.FormEvent) => {
+      e?.preventDefault();
+      const text = input.trim();
+      if (!text || isLoading) return;
 
-    setInput('');
-    setIsLoading(true);
+      setInput("");
+      setIsLoading(true);
 
-    const userMsgId = generateId();
-    const assistantMsgId = generateId();
+      const userMsgId = generateId();
+      const assistantMsgId = generateId();
 
-    setMessages(prev => [
-      ...prev,
-      { id: userMsgId, role: 'user', content: text },
-      { id: assistantMsgId, role: 'assistant', content: '', isStreaming: true },
-    ]);
+      setMessages((prev) => [
+        ...prev,
+        { id: userMsgId, role: "user", content: text },
+        {
+          id: assistantMsgId,
+          role: "assistant",
+          content: "",
+          isStreaming: true,
+        },
+      ]);
 
-    try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: text,
-          conversationId: activeConvIdRef.current ?? undefined,
-        }),
-      });
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: text,
+            conversationId: activeConvIdRef.current ?? undefined,
+          }),
+        });
 
-      if (!res.ok || !res.body) throw new Error('Request failed');
+        if (!res.ok || !res.body) throw new Error("Request failed");
 
-      // Headers are available immediately, before reading the body
-      const newConvId = res.headers.get('X-Conversation-Id');
-      const rawCitations = res.headers.get('X-Citations');
-      const citations: Citation[] = rawCitations ? JSON.parse(rawCitations) : [];
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let metadataParsed = false;
+        let citations: Citation[] = [];
 
-      if (newConvId && newConvId !== activeConvIdRef.current) {
-        activeConvIdRef.current = newConvId;
-        onConversationCreated(newConvId);
-      }
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
 
-      // Read the plain text stream body
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let accText = '';
+          if (!metadataParsed) {
+            const sep = buffer.indexOf(STREAM_SEPARATOR);
+            if (sep === -1) continue;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        accText += decoder.decode(value, { stream: true });
-        setMessages(prev =>
-          prev.map(m =>
-            m.id === assistantMsgId ? { ...m, content: accText } : m
-          )
+            const meta = JSON.parse(buffer.slice(0, sep)) as {
+              conversationId: string;
+              citations: Citation[];
+            };
+            citations = meta.citations;
+            if (
+              meta.conversationId &&
+              meta.conversationId !== activeConvIdRef.current
+            ) {
+              activeConvIdRef.current = meta.conversationId;
+              onConversationCreated(meta.conversationId);
+            }
+            buffer = buffer.slice(sep + STREAM_SEPARATOR.length);
+            metadataParsed = true;
+          }
+
+          if (metadataParsed) {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMsgId ? { ...m, content: buffer } : m,
+              ),
+            );
+          }
+        }
+
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantMsgId
+              ? { ...m, isStreaming: false, citations }
+              : m,
+          ),
         );
+      } catch (err) {
+        console.error(err);
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantMsgId
+              ? {
+                  ...m,
+                  content: "Sorry, something went wrong. Please try again.",
+                  isStreaming: false,
+                }
+              : m,
+          ),
+        );
+      } finally {
+        setIsLoading(false);
+        textareaRef.current?.focus();
       }
-
-      setMessages(prev =>
-        prev.map(m =>
-          m.id === assistantMsgId
-            ? { ...m, isStreaming: false, citations }
-            : m
-        )
-      );
-    } catch (err) {
-      console.error(err);
-      setMessages(prev =>
-        prev.map(m =>
-          m.id === assistantMsgId
-            ? { ...m, content: 'Sorry, something went wrong. Please try again.', isStreaming: false }
-            : m
-        )
-      );
-    } finally {
-      setIsLoading(false);
-      textareaRef.current?.focus();
-    }
-  }, [input, isLoading, onConversationCreated]);
+    },
+    [input, isLoading, onConversationCreated],
+  );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSubmit();
     }
@@ -142,21 +170,27 @@ export function ChatInterface({
               <Sparkles size={28} className="text-accent" />
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-white mb-1">How can I help you?</h2>
+              <h2 className="text-lg font-semibold text-white mb-1">
+                How can I help you?
+              </h2>
               <p className="text-sm text-slate-400 max-w-xs">
-                Ask me anything about your product. I&apos;ll search the uploaded documentation and answer with citations.
+                Ask me anything about your product. I&apos;ll search the
+                uploaded documentation and answer with citations.
               </p>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full max-w-lg mt-2">
               {[
-                'How do I get started?',
-                'What integrations are available?',
-                'How does billing work?',
-                'What are the API rate limits?',
-              ].map(suggestion => (
+                "How do I get started?",
+                "What integrations are available?",
+                "How does billing work?",
+                "What are the API rate limits?",
+              ].map((suggestion) => (
                 <button
                   key={suggestion}
-                  onClick={() => { setInput(suggestion); textareaRef.current?.focus(); }}
+                  onClick={() => {
+                    setInput(suggestion);
+                    textareaRef.current?.focus();
+                  }}
                   className="px-3 py-2.5 rounded-xl bg-surface-2 border border-border hover:border-border-light hover:bg-surface-3 text-sm text-slate-300 text-left transition-colors"
                 >
                   {suggestion}
@@ -165,7 +199,7 @@ export function ChatInterface({
             </div>
           </div>
         ) : (
-          messages.map(m => (
+          messages.map((m) => (
             <MessageBubble
               key={m.id}
               role={m.role}
@@ -185,16 +219,16 @@ export function ChatInterface({
             <textarea
               ref={textareaRef}
               value={input}
-              onChange={e => setInput(e.target.value)}
+              onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Ask a question about your product…"
               rows={1}
               disabled={isLoading}
               className="w-full resize-none bg-surface-2 border border-border hover:border-border-light focus:border-accent rounded-xl px-4 py-3 text-sm text-slate-200 placeholder-slate-500 outline-none transition-colors disabled:opacity-50"
-              style={{ maxHeight: '160px', overflowY: 'auto' }}
+              style={{ maxHeight: "160px", overflowY: "auto" }}
               onInput={(e) => {
                 const el = e.currentTarget;
-                el.style.height = 'auto';
+                el.style.height = "auto";
                 el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
               }}
             />
@@ -204,10 +238,11 @@ export function ChatInterface({
             disabled={!input.trim() || isLoading}
             className="flex-shrink-0 w-10 h-10 rounded-xl bg-accent hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center transition-all duration-150 active:scale-95"
           >
-            {isLoading
-              ? <Bot size={16} className="text-white animate-pulse" />
-              : <Send size={16} className="text-white" />
-            }
+            {isLoading ? (
+              <Bot size={16} className="text-white animate-pulse" />
+            ) : (
+              <Send size={16} className="text-white" />
+            )}
           </button>
         </form>
         <p className="text-xs text-slate-600 mt-2 text-center">

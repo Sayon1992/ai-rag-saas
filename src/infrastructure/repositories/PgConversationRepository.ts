@@ -45,7 +45,9 @@ export class PgConversationRepository implements IConversationRepository {
 
   async updateTitle(id: string, title: string): Promise<void> {
     await db.query(
-      'UPDATE conversations SET title = $1, updated_at = NOW() WHERE id = $2',
+      `UPDATE conversations
+         SET title = COALESCE(title, $1), updated_at = NOW()
+       WHERE id = $2`,
       [title, id]
     );
   }

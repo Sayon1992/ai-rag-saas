@@ -1,18 +1,18 @@
 const CHUNK_SIZE = 1_500;   // characters
 const CHUNK_OVERLAP = 200;  // characters
 
-// Maps common Unicode typographic characters to ASCII equivalents so the pg
-// driver never hits a Latin-1 encoding path on characters > U+00FF.
+// Normalize common typographic glyphs to their ASCII equivalents for
+// consistency across chunks. Postgres + UTF-8 handles any remaining Unicode
+// natively — no destructive stripping needed.
 function sanitize(text: string): string {
   return text
     .normalize('NFC')           // compose decomposed chars first (e + ´ → é)
-    .replace(/[''‚‛′‵]/g, "'") // smart single quotes
-    .replace(/[""„‟″‶]/g, '"') // smart double quotes
-    .replace(/[–—―]/g, '-')    // en-dash, em-dash
-    .replace(/…/g, '...')      // ellipsis
-    .replace(/[•‣◦⁃]/g, '*')  // bullets
-    .replace(/ /g, ' ')   // non-breaking space
-    .replace(/[^\x00-\xFF]/g, ' '); // strip anything still outside Latin-1
+    .replace(/[‘’‚‛′‵]/g, "'") // smart single quotes
+    .replace(/[“”„‟″‶]/g, '"') // smart double quotes
+    .replace(/[–—―]/g, '-')                   // en/em/horizontal dash
+    .replace(/…/g, '...')                                // ellipsis
+    .replace(/[•‣◦⁃]/g, '*')             // bullets
+    .replace(/ /g, ' ');                                 // non-breaking space
 }
 
 export function chunkText(text: string): string[] {
