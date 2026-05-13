@@ -10,8 +10,8 @@ function createPool(): Pool {
 
   return new Pool({
     connectionString,
-    max: 10,
-    idleTimeoutMillis: 30_000,
+    max: 1,
+    idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 5_000,
   });
 }
